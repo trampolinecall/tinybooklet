@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import dataclasses
 
 import pypdf
-import pypdf.annotations
+import pypdf.generic as pypdfg
 import argparse
 
 @dataclass
@@ -30,7 +30,7 @@ def parse_args() -> Args:
             ('The number of pages at the end of the input PDF to keep as the last pages of the booklet. '
              'Any blank pages needed to pad the page count to a multiple of 4 are inserted before these last pages.'),
     )
-    parser.add_argument('-m', '--mark-cut-lines', action='store_true', help='Mark the lines to cut along after the sheet is printed')
+    parser.add_argument('-k', '--mark-cut-lines', action='store_true', help='Mark the lines to cut along after the sheet is printed')
 
     args = parser.parse_args()
 
@@ -47,7 +47,7 @@ def parse_args() -> Args:
 
 def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_last_pages: int, mark_cut_lines: bool) -> None:
     # this is measured in inches
-    input_page_sizes = set(map(lambda page: (page.mediabox.width * page.user_unit, page.mediabox.height * page.user_unit), input.pages))
+    input_page_sizes = set(map(lambda page: (page.mediabox.width * page.user_unit / 72, page.mediabox.height * page.user_unit / 72), input.pages))
     if len(input_page_sizes) != 1:
         raise Exception('pdf has multiple different page sizes')
     input_page_size: tuple[float, float] = input_page_sizes.pop()
@@ -139,14 +139,12 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
         return sheets
 
     def write_sheets(sheets: list[OutputSheet]) -> None:
-        def add_page(annotations: list[pypdf.annotations.Rectangle], output_page: pypdf.PageObject, input_page: Page, x: float, y: float) -> None:
-            transform = pypdf.Transformation().scale(scale, scale).translate(x, y)
+        def add_page(drawing_commands: list[str], output_page: pypdf.PageObject, input_page: Page, x: float, y: float) -> None:
+            transform = pypdf.Transformation().scale(scale, scale).translate(x * 72, y * 72)
             if mark_cut_lines:
-                left = x
-                right = x + input_page_size[0] * scale
-                bottom = y
-                top = y + input_page_size[1] * scale
-                annotations.append(pypdf.annotations.Rectangle((left, bottom, right, top)))
+                left = x * 72
+                bottom = y * 72
+                drawing_commands.append(f'{left} {bottom} {input_page_size[0] * scale * 72} {input_page_size[1] * scale * 72} re s')
             if isinstance(input_page, BlankPage):
                 pass
             else:
@@ -156,23 +154,29 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
         output_sheet_height = input_page_size[1]
 
         for sheet in sheets:
-            front_side = output.add_blank_page(output_sheet_width, output_sheet_height)
-            back_side = output.add_blank_page(output_sheet_width, output_sheet_height)
+            front_side = output.add_blank_page(output_sheet_width * 72, output_sheet_height * 72)
+            back_side = output.add_blank_page(output_sheet_width * 72, output_sheet_height * 72)
 
-            front_annotations: list[pypdf.annotations.Rectangle] = []
-            back_annotations: list[pypdf.annotations.Rectangle] = []
+            front_drawing_commands: list[str] = ['0 0 0 RG 1 w']
+            back_drawing_commands: list[str] = ['0 0 0 RG 1 w']
 
             for (spread_x, spread_y, spread) in sheet.iter_spreads():
-                add_page(front_annotations, front_side, spread.front_left, spread_size[0] * spread_x, spread_size[1] * spread_y)
-                add_page(front_annotations, front_side, spread.front_right, spread_size[0] * (spread_x + 0.5), spread_size[1] * spread_y)
-                add_page(back_annotations, back_side, spread.back_left, output_sheet_width - spread_size[0] * (spread_x + 1 - 0.5), spread_size[1] * spread_y)
-                add_page(back_annotations, back_side, spread.back_right, output_sheet_width - spread_size[0] * (spread_x + 1), spread_size[1] * spread_y)
+                add_page(front_drawing_commands, front_side, spread.front_left, spread_size[0] * spread_x, spread_size[1] * spread_y)
+                add_page(front_drawing_commands, front_side, spread.front_right, spread_size[0] * (spread_x + 0.5), spread_size[1] * spread_y)
+                add_page(back_drawing_commands, back_side, spread.back_left, output_sheet_width - spread_size[0] * (spread_x + 1 - 0.5), spread_size[1] * spread_y)
+                add_page(back_drawing_commands, back_side, spread.back_right, output_sheet_width - spread_size[0] * (spread_x + 1), spread_size[1] * spread_y)
 
-            for ann in front_annotations:
-                output.add_annotation(front_side, ann)
+            front_contents = front_side.get_contents()
+            assert front_contents is not None # TODO: not sure what to do if this happens
+            new_front_contents = front_contents.clone(output)
+            new_front_contents.set_data(new_front_contents.get_data() + ' '.join(front_drawing_commands).encode('ascii'))
+            front_side.replace_contents(new_front_contents)
 
-            for ann in back_annotations:
-                output.add_annotation(back_side, ann)
+            back_contents = back_side.get_contents()
+            assert back_contents is not None # TODO: not sure what to do if this happens
+            new_back_contents = back_contents.clone(output)
+            new_back_contents.set_data(new_back_contents.get_data() + ' '.join(back_drawing_commands).encode('ascii'))
+            back_side.replace_contents(new_back_contents)
 
     pages = pad_pages([OriginalPage(n) for n in range(input.get_num_pages())])
     spreads = make_spreads(pages)
