@@ -1,2 +1,3 @@
-# bookletimpose
-An extremely simple booklet imposition thing
+# tinybooklet
+
+An extremely simple imposition tool for making tiny booklets
