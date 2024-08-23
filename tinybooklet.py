@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import dataclasses
 
 import pypdf
+import pypdf.annotations
 import argparse
 
 @dataclass
@@ -12,6 +13,7 @@ class Args:
     output: str
     scale: float
     last_pages: int
+    mark_cut_lines: bool
 
 def parse_args() -> Args:
     parser = argparse.ArgumentParser(description="tinybooklet - An extremely imposition tool for making tiny booklets")
@@ -26,8 +28,9 @@ def parse_args() -> Args:
         dest='last_pages',
         help=
             ('The number of pages at the end of the input PDF to keep as the last pages of the booklet. '
-             'Any blank pages needed to pad the page count to a multiple of 4 are inserted before these last pages.')
+             'Any blank pages needed to pad the page count to a multiple of 4 are inserted before these last pages.'),
     )
+    parser.add_argument('-m', '--mark-cut-lines', action='store_true', help='Mark the lines to cut along after the sheet is printed')
 
     args = parser.parse_args()
 
@@ -39,9 +42,10 @@ def parse_args() -> Args:
         output=args.output,
         scale=int(num) / int(denom), # TODO: do a proper error message for this instead of "ValueError: invalid literal for int() with base 10"
         last_pages=args.last_pages,
+        mark_cut_lines=args.mark_cut_lines,
     )
 
-def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_last_pages: int) -> None:
+def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_last_pages: int, mark_cut_lines: bool) -> None:
     # this is measured in inches
     input_page_sizes = set(map(lambda page: (page.mediabox.width * page.user_unit, page.mediabox.height * page.user_unit), input.pages))
     if len(input_page_sizes) != 1:
@@ -135,12 +139,18 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
         return sheets
 
     def write_sheets(sheets: list[OutputSheet]) -> None:
-        def add_page(transformation: pypdf.Transformation, output_page: pypdf.PageObject, input_page: Page) -> None:
+        def add_page(annotations: list[pypdf.annotations.Rectangle], output_page: pypdf.PageObject, input_page: Page, x: float, y: float) -> None:
+            transform = pypdf.Transformation().scale(scale, scale).translate(x, y)
+            if mark_cut_lines:
+                left = x
+                right = x + input_page_size[0] * scale
+                bottom = y
+                top = y + input_page_size[1] * scale
+                annotations.append(pypdf.annotations.Rectangle((left, bottom, right, top)))
             if isinstance(input_page, BlankPage):
-                print('blank')
                 pass
             else:
-                output_page.merge_transformed_page(input.get_page(input_page.page_number), transformation)
+                output_page.merge_transformed_page(input.get_page(input_page.page_number), transform)
 
         output_sheet_width = input_page_size[0]
         output_sheet_height = input_page_size[1]
@@ -149,11 +159,20 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
             front_side = output.add_blank_page(output_sheet_width, output_sheet_height)
             back_side = output.add_blank_page(output_sheet_width, output_sheet_height)
 
+            front_annotations: list[pypdf.annotations.Rectangle] = []
+            back_annotations: list[pypdf.annotations.Rectangle] = []
+
             for (spread_x, spread_y, spread) in sheet.iter_spreads():
-                add_page(pypdf.Transformation().scale(scale, scale).translate(spread_size[0] * spread_x, spread_size[1] * spread_y), front_side, spread.front_left)
-                add_page(pypdf.Transformation().scale(scale, scale).translate(spread_size[0] * (spread_x + 0.5), spread_size[1] * spread_y), front_side, spread.front_right)
-                add_page(pypdf.Transformation().scale(scale, scale).translate(output_sheet_width - spread_size[0] * (spread_x + 1 - 0.5), spread_size[1] * spread_y), back_side, spread.back_left)
-                add_page(pypdf.Transformation().scale(scale, scale).translate(output_sheet_width - spread_size[0] * (spread_x + 1), spread_size[1] * spread_y), back_side, spread.back_right)
+                add_page(front_annotations, front_side, spread.front_left, spread_size[0] * spread_x, spread_size[1] * spread_y)
+                add_page(front_annotations, front_side, spread.front_right, spread_size[0] * (spread_x + 0.5), spread_size[1] * spread_y)
+                add_page(back_annotations, back_side, spread.back_left, output_sheet_width - spread_size[0] * (spread_x + 1 - 0.5), spread_size[1] * spread_y)
+                add_page(back_annotations, back_side, spread.back_right, output_sheet_width - spread_size[0] * (spread_x + 1), spread_size[1] * spread_y)
+
+            for ann in front_annotations:
+                output.add_annotation(front_side, ann)
+
+            for ann in back_annotations:
+                output.add_annotation(back_side, ann)
 
     pages = pad_pages([OriginalPage(n) for n in range(input.get_num_pages())])
     spreads = make_spreads(pages)
@@ -166,7 +185,7 @@ def main() -> None:
     input_pdf = pypdf.PdfReader(args.input)
     output_pdf = pypdf.PdfWriter()
 
-    impose(input_pdf, output_pdf, args.scale, args.last_pages)
+    impose(input_pdf, output_pdf, args.scale, args.last_pages, args.mark_cut_lines)
 
     with open(args.output, 'wb') as f:
         output_pdf.write(f)
