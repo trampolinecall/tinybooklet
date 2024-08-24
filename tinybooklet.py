@@ -17,6 +17,8 @@ class Args:
     mark_color: tuple[int, int, int]
 
 def parse_args() -> Args:
+    """Parse command-line arguments"""
+
     parser = argparse.ArgumentParser(description="tinybooklet - An extremely imposition tool for making tiny booklets")
 
     parser.add_argument('-i', '--input', required=True, help='Input file')
@@ -53,7 +55,21 @@ def parse_args() -> Args:
     )
 
 def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_last_pages: int, mark_cut_lines: bool, mark_color: tuple[int, int, int], mark_width: float) -> None:
-    # this is measured in inches
+    """Run imposition on a PDF
+
+    Arguments:
+    - input: The input file
+    - output: The output file
+    - scale: The size of the booklet's pages compared to the size of the input pages. This is the same as the argument to the `--scale` command line argument
+    - num_last_pages: The number of pages at the end of the input PDF to keep as the last pages of the booklet. This is the same as the argument to the `--last` command line argument
+    - mark_cut_lines: Whether or not to mark the lines to cut along
+    - mark_color: The color of the lines enabled by the `mark_cut_lines` option. The tuple should contain RGB values in the range 0 to 255
+    - mark_width: The width of the lines enabled by the `mark_cut_lines` option. This is measured in inches
+    """
+
+    # input_page_size, input_page_sizes, and spread_size are measured in inches
+
+    # Get the size of the pages in the input PDF, erroring if different pages have different sizes in the PDF
     input_page_sizes = set(map(lambda page: (page.mediabox.width * page.user_unit / 72, page.mediabox.height * page.user_unit / 72), input.pages))
     if len(input_page_sizes) != 1:
         raise Exception('pdf has multiple different page sizes')
@@ -62,17 +78,22 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
     spread_size = (input_page_size[0] * scale * 2, input_page_size[1] * scale)
 
     @dataclass
-    # TODO: write actual documentation for this but this is an actual page taken from the input pdf
     class OriginalPage:
+        """A page taken from the input PDF"""
         page_number: int
     class BlankPage:
+        """A blank page inserted into the booklet to pad the page count to a multiple of 4"""
         pass
-
     Page = OriginalPage | BlankPage
 
     @dataclass
     class Spread:
-        # TODO: write actual documentation for this but the gist of it is imagine looking at a spread from the front so the page on the left side of the front is front_left and likewise with front_right but the backside is also defined based on looking at the front side so the back_left is the backside of front_left
+        """A spread that contains 4 pages: two on the front and two on the back. Every spread, when turned into a booklet, should have a vertical fold in the middle of it.
+
+        If you imagine looking at a spread from the front, the page on the left side of the front is front_left and likewise with front_right. The backside is also defined based on the directions looking from the front side, so the back_left is the backside of front_left and back_right is the backside of front_right.
+
+        For another example, if you imagine a booklet with only 4 pages, it would only have one spread. Page 1 would be on the back_left, page 2 would be on the front_left, page 3 would be on the front_right, and page 4 would be on the back_right.
+        """
         front_left: Page
         front_right: Page
         back_left: Page
@@ -80,31 +101,44 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
 
     @dataclass
     class OutputSheet:
-        # this is also measured in inches
+        """A sheet of paper that the output is printed on. It will contain many spreads on it."""
+        # paper_size is also measured in inches
         paper_size: tuple[float, float]
         spreads: list[Spread] = dataclasses.field(default_factory=lambda: [])
 
         @property
         def spread_grid_rows(self) -> int:
+            """The number of rows of spreads that can fit on this output sheet."""
             return int(self.paper_size[1] // spread_size[1])
         @property
         def spread_grid_cols(self) -> int:
+            """The number of columns of spreads that can fit on this output sheet."""
             return int(self.paper_size[0] // spread_size[0])
 
         @property
         def max_spreads(self) -> int:
+            """The total number of spreads that can fit on this output sheet."""
             return self.spread_grid_rows * self.spread_grid_cols
 
         def is_full(self) -> bool:
+            """Return whether or not this output sheet is fully filled up."""
             return len(self.spreads) >= self.max_spreads
 
         def add_spread(self, spread: Spread) -> None:
+            """Add a new spread to this output sheet.
+
+            This will throw an exception if the sheet is full
+            """
             if self.is_full():
                 raise Exception('cannot add spread to an output sheet that is already full')
 
             self.spreads.append(spread)
 
         def iter_spreads(self) -> Iterable[tuple[int, int, Spread]]:
+            """Iterate through all of the spreads on this page with the coordinates of where they are.
+
+            Note that the coordinates are for the spreads and not for the pages, so they always increment by 1.
+            """
             x = 0
             y = 0
             for i, spread in enumerate(self.spreads):
@@ -115,6 +149,7 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
                     y += 1
 
     def pad_pages(pages: list[OriginalPage]) -> list[Page]:
+        """Pad the list of pages to a multiple of 4, taking num_last_pages into account"""
         if len(pages) % 4 != 0:
             pages_to_add = 4 - len(pages) % 4
 
@@ -127,6 +162,15 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
             return cast(list[Page], pages)
 
     def make_spreads(pages: list[Page]) -> list[Spread]:
+        """Group a list of pages into spreads.
+
+        The input list of pages should have a length that is a multiple of 4.
+        """
+
+        # This works as a recursive algorithm.
+        # First, we take the first two pages and last two pages and make a spread out of that, with the first page going on the back_left, the second going on the front_left, the second to last going on the front_right, and the last going on the back_right.
+        # From there, we can imagine taking off those first two pages and last two pages and making a booklet out of the inner pages, which is where we can recurse on the inner pages.
+
         if len(pages) == 0:
             return []
         else:
@@ -135,6 +179,8 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
             return [spread] + make_spreads(pages_left)
 
     def lay_out_spreads(spreads: list[Spread]) -> list[OutputSheet]:
+        """Lay out spreads onto output sheets."""
+
         sheets = [OutputSheet(input_page_size)]
 
         for spread in spreads:
@@ -146,17 +192,31 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
         return sheets
 
     def write_sheets(sheets: list[OutputSheet]) -> None:
+        """Write output sheets to the output pdf"""
+
         def add_page(drawing_commands: list[str], output_page: pypdf.PageObject, input_page: Page, x: float, y: float) -> None:
-            transform = pypdf.Transformation().scale(scale, scale).translate(x * 72, y * 72)
+            """Write a page of the input pdf to an output page at a certain location
+
+            Arguments:
+            - drawing_commands: Any drawing commands that are used to make the cut lines are added to this list
+            - output_page: The output page to put a page on
+            - input_page: THe input page to put onto the output page
+            - x, y: The coordinates of where the input_page should appear on the output page, measured in inches. Note that this follows the PDF coordinate space, so y=0 is at the bottom of the page
+            """
+
             if mark_cut_lines:
                 left = x * 72
                 bottom = y * 72
                 drawing_commands.append(f'{left} {bottom} {input_page_size[0] * scale * 72} {input_page_size[1] * scale * 72} re s')
+
             if isinstance(input_page, BlankPage):
                 pass
             else:
+                transform = pypdf.Transformation().scale(scale, scale).translate(x * 72, y * 72)
                 output_page.merge_transformed_page(input.get_page(input_page.page_number), transform)
 
+        # This is also measured in inches
+        # Right now, we just take the page size of the input PDF, but in the future, this might take the size from a command-line argument
         output_sheet_width = input_page_size[0]
         output_sheet_height = input_page_size[1]
 
@@ -164,7 +224,7 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
             front_side = output.add_blank_page(output_sheet_width * 72, output_sheet_height * 72)
             back_side = output.add_blank_page(output_sheet_width * 72, output_sheet_height * 72)
 
-            print(mark_width * 72 / front_side.user_unit)
+            # These first 2 commands set the stroke color and the stroke width of the drawing contex
             front_drawing_commands: list[str] = [f'{mark_color[0] / 255} {mark_color[1] / 255} {mark_color[2] / 255} RG {mark_width * 72 / front_side.user_unit} w']
             back_drawing_commands: list[str] = [f'{mark_color[0] / 255} {mark_color[1] / 255} {mark_color[2] / 255} RG {mark_width * 72 / back_side.user_unit} w']
 
