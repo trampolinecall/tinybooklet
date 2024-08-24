@@ -14,15 +14,16 @@ class Args:
     scale: float
     last_pages: int
     mark_cut_lines: bool
+    mark_width: float
+    mark_color: tuple[int, int, int]
 
 def parse_args() -> Args:
     parser = argparse.ArgumentParser(description="tinybooklet - An extremely imposition tool for making tiny booklets")
 
-    parser.add_argument('-i', '--input', metavar='INPUT', required=True, help='Input file')
-    parser.add_argument('-o', '--output', metavar='OUTPUT', required=True, help='Output file')
-    parser.add_argument('-s', '--scale', metavar='SCALE', required=True, help='The scale of the booklet\'s pages compared to the input pages, written as a fraction (e.g. \"1/4\")')
+    parser.add_argument('-i', '--input', required=True, help='Input file')
+    parser.add_argument('-o', '--output', required=True, help='Output file')
+    parser.add_argument('-s', '--scale', required=True, help='The scale of the booklet\'s pages compared to the input pages, written as a fraction (e.g. \"1/4\")')
     parser.add_argument('-l', '--last', '--last-pages',
-        metavar='LASTPAGES',
         type=int,
         default=0,
         dest='last_pages',
@@ -30,12 +31,17 @@ def parse_args() -> Args:
             ('The number of pages at the end of the input PDF to keep as the last pages of the booklet. '
              'Any blank pages needed to pad the page count to a multiple of 4 are inserted before these last pages.'),
     )
-    parser.add_argument('-k', '--mark-cut-lines', action='store_true', help='Mark the lines to cut along after the sheet is printed')
+    parser.add_argument('-k', '--mark-cut-lines', action='store_true', help='Whether or not to mark the lines to cut along after the sheet is printed')
+    parser.add_argument('--mark-width', type=int, default=0.01, help='The line width of the cut lines in inches')
+    parser.add_argument('--mark-color', default='bbbbbb', help='The color of the cut lines')
 
     args = parser.parse_args()
 
     # TODO: do a proper error message for this instead of "ValueError: not enough values to unpack (expected 2, got 1)"
     num, denom = args.scale.split("/", 1)
+
+    mark_color_int = int(args.mark_color, 16)
+    mark_color = (0xff & (mark_color_int >> 16), 0xff & (mark_color_int >> 8), 0xff & mark_color_int)
 
     return Args(
         input=args.input,
@@ -43,9 +49,11 @@ def parse_args() -> Args:
         scale=int(num) / int(denom), # TODO: do a proper error message for this instead of "ValueError: invalid literal for int() with base 10"
         last_pages=args.last_pages,
         mark_cut_lines=args.mark_cut_lines,
+        mark_width=args.mark_width,
+        mark_color=mark_color,
     )
 
-def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_last_pages: int, mark_cut_lines: bool) -> None:
+def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_last_pages: int, mark_cut_lines: bool, mark_color: tuple[int, int, int], mark_width: float) -> None:
     # this is measured in inches
     input_page_sizes = set(map(lambda page: (page.mediabox.width * page.user_unit / 72, page.mediabox.height * page.user_unit / 72), input.pages))
     if len(input_page_sizes) != 1:
@@ -157,8 +165,9 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
             front_side = output.add_blank_page(output_sheet_width * 72, output_sheet_height * 72)
             back_side = output.add_blank_page(output_sheet_width * 72, output_sheet_height * 72)
 
-            front_drawing_commands: list[str] = ['0 0 0 RG 1 w']
-            back_drawing_commands: list[str] = ['0 0 0 RG 1 w']
+            print(mark_width * 72 / front_side.user_unit)
+            front_drawing_commands: list[str] = [f'{mark_color[0] / 255} {mark_color[1] / 255} {mark_color[2] / 255} RG {mark_width * 72 / front_side.user_unit} w']
+            back_drawing_commands: list[str] = [f'{mark_color[0] / 255} {mark_color[1] / 255} {mark_color[2] / 255} RG {mark_width * 72 / back_side.user_unit} w']
 
             for (spread_x, spread_y, spread) in sheet.iter_spreads():
                 add_page(front_drawing_commands, front_side, spread.front_left, spread_size[0] * spread_x, spread_size[1] * spread_y)
@@ -189,7 +198,7 @@ def main() -> None:
     input_pdf = pypdf.PdfReader(args.input)
     output_pdf = pypdf.PdfWriter()
 
-    impose(input_pdf, output_pdf, args.scale, args.last_pages, args.mark_cut_lines)
+    impose(input_pdf, output_pdf, args.scale, args.last_pages, args.mark_cut_lines, args.mark_color, args.mark_width)
 
     with open(args.output, 'wb') as f:
         output_pdf.write(f)
