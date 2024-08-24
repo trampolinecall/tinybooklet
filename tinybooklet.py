@@ -4,7 +4,6 @@ from dataclasses import dataclass
 import dataclasses
 
 import pypdf
-import pypdf.generic as pypdfg
 import argparse
 
 @dataclass
