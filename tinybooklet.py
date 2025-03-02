@@ -19,7 +19,7 @@ class Args:
 def parse_args() -> Args:
     """Parse command-line arguments"""
 
-    parser = argparse.ArgumentParser(description="tinybooklet - An extremely imposition tool for making tiny booklets")
+    parser = argparse.ArgumentParser(description="tinybooklet - An extremely simple imposition tool for making tiny booklets")
 
     parser.add_argument('-i', '--input', required=True, help='Input file')
     parser.add_argument('-o', '--output', required=True, help='Output file')
