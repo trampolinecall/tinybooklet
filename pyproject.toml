@@ -1,0 +1,30 @@
+[project]
+name = "tinybooklet"
+version = "0.0.0"
+description = "A simple imposition tool for making tiny booklets."
+
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+
+requires-python = ">=3.14"
+
+dependencies = [
+    "pypdf >= 4"
+]
+
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/trampolinecall/tinybooklet"
+Issues = "https://github.com/trampolinecall/tinybooklet/issues"
+
+[project.scripts]
+tinybooklet = "tinybooklet:main"
+
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"

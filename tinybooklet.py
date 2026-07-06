@@ -1,10 +1,13 @@
-from typing import cast, Iterable
+#!/usr/bin/env python
+
+from typing import Iterable
 
 from dataclasses import dataclass
 import dataclasses
 
-import pypdf
 import argparse
+
+import pypdf
 
 @dataclass
 class Args:
@@ -21,9 +24,9 @@ def parse_args() -> Args:
 
     parser = argparse.ArgumentParser(description="tinybooklet - An extremely simple imposition tool for making tiny booklets")
 
-    parser.add_argument('-i', '--input', required=True, help='Input file')
-    parser.add_argument('-o', '--output', required=True, help='Output file')
-    parser.add_argument('-s', '--scale', required=True, help='The scale of the booklet\'s pages compared to the input pages, written as a fraction (e.g. \"1/4\")')
+    parser.add_argument(dest='input', help='Input file')
+    parser.add_argument(dest='output', help='Output file')
+    parser.add_argument('-s', '--scale', default='1/1', help='The scale of the booklet\'s pages compared to the input pages, written as a fraction (e.g. \"1/4\"; default \"1/1\")')
     parser.add_argument('-l', '--last', '--last-pages',
         type=int,
         default=0,
@@ -77,14 +80,7 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
 
     spread_size = (input_page_size[0] * scale * 2, input_page_size[1] * scale)
 
-    @dataclass
-    class OriginalPage:
-        """A page taken from the input PDF"""
-        page_number: int
-    class BlankPage:
-        """A blank page inserted into the booklet to pad the page count to a multiple of 4"""
-        pass
-    Page = OriginalPage | BlankPage
+    type Page = int | None # None represents a blank page that was inserted, while an int represents a page number from the original pdf
 
     @dataclass
     class Spread:
@@ -141,31 +137,33 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
             """
             x = 0
             y = 0
-            for i, spread in enumerate(self.spreads):
+            for spread in self.spreads:
                 yield (x, y, spread)
                 x += 1
                 if x >= self.spread_grid_cols:
                     x = 0
                     y += 1
 
-    def pad_pages(pages: list[OriginalPage]) -> list[Page]:
+    def pad_pages(pages: list[Page]) -> list[Page]:
         """Pad the list of pages to a multiple of 4, taking num_last_pages into account"""
         if len(pages) % 4 != 0:
             pages_to_add = 4 - len(pages) % 4
 
             first_pages = pages[:len(pages) - num_last_pages]
-            last_pages = cast(list[Page], pages[len(pages) - num_last_pages:])
-            blank_pages = [BlankPage() for _ in range(pages_to_add)]
+            last_pages = pages[len(pages) - num_last_pages:]
+            blank_pages = [None] * pages_to_add
 
             return first_pages + blank_pages + last_pages
         else:
-            return cast(list[Page], pages)
+            return pages
 
     def make_spreads(pages: list[Page]) -> list[Spread]:
         """Group a list of pages into spreads.
 
         The input list of pages should have a length that is a multiple of 4.
         """
+
+        assert len(pages) % 4 == 0
 
         # This works as a recursive algorithm.
         # First, we take the first two pages and last two pages and make a spread out of that, with the first page going on the back_left, the second going on the front_left, the second to last going on the front_right, and the last going on the back_right.
@@ -209,7 +207,7 @@ def impose(input: pypdf.PdfReader, output: pypdf.PdfWriter, scale: float, num_la
                 bottom = y * 72
                 drawing_commands.append(f'{left} {bottom} {input_page_size[0] * scale * 72} {input_page_size[1] * scale * 72} re s')
 
-            if isinstance(input_page, BlankPage):
+            if input_page is None:
                 pass
             else:
                 transform = pypdf.Transformation().scale(scale, scale).translate(x * 72, y * 72)
